@@ -1,0 +1,45 @@
+import os
+import sys
+import subprocess
+from pathlib import Path
+
+from tomlkit import load
+
+
+def get_config_path() -> Path:
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA", Path.home() / "AppData/Roaming"))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library/Application Support"
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+
+    return base / "diodos" / "config.toml"
+
+
+def load_config(path: str | Path | None = None) -> dict:
+    """Load the diodos configuration from TOML."""
+    config_path = Path(path).expanduser() if path else get_config_path()
+
+    if not config_path.exists():
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.touch()
+        with config_path.open("w") as file:
+            with open(Path(__file__).parent / "sample.config.toml", "r") as default_file:
+                file.write(default_file.read())
+        open_config_file(config_path)
+        raise FileNotFoundError(f"Config file not found. Created default at: {config_path}")
+
+    with config_path.open("rb") as file:
+        return load(file).unwrap()
+
+
+def open_config_file(path: str | Path) -> None:
+    path = Path(path)
+
+    if sys.platform == "win32":
+        os.startfile(path)
+    elif sys.platform == "darwin":
+        subprocess.run(["open", str(path)], check=False)
+    else:
+        subprocess.run(["xdg-open", str(path)], check=False)

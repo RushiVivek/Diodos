@@ -1,0 +1,32 @@
+[project]
+name = "diodos"
+version = "0.1.0"
+description = "Auto detect and login to the captive portal of given networks."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "RushiVivek", email = "rushivivek123@gmail.com" }]
+requires-python = ">=3.13"
+keywords = ["captive-portal", "network", "cli", "automation", "wifi"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Internet",
+    "Topic :: Utilities",
+]
+dependencies = ["requests>=2.34.2", "tomlkit>=0.15.1", "typer>=0.27.1"]
+
+[project.urls]
+Homepage = "https://github.com/RushiVivek/Diodos"
+Repository = "https://github.com/RushiVivek/Diodos"
+Issues = "https://github.com/RushiVivek/Diodos/issues"
+
+[project.scripts]
+diodos = "diodos.main:app"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"

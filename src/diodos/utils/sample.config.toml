@@ -1,0 +1,11 @@
+[network_check]
+url = "test_url"
+msg = "test_msg"
+interval = 60
+
+[login]
+url = "url"
+
+[login.credentials]
+username = "..."
+password = "..."
