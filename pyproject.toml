@@ -1,6 +1,6 @@
 [project]
 name = "diodos"
-version = "0.2.1"
+version = "0.3.0"
 description = "Auto detect and login to the captive portal of given networks."
 readme = "README.md"
 license = "MIT"
@@ -17,7 +17,12 @@ classifiers = [
     "Topic :: Internet",
     "Topic :: Utilities",
 ]
-dependencies = ["requests>=2.34.2", "tomlkit>=0.15.1", "typer>=0.27.1"]
+dependencies = [
+    "psutil>=7.2.2",
+    "requests>=2.34.2",
+    "tomlkit>=0.15.1",
+    "typer>=0.27.1",
+]
 
 [project.urls]
 Homepage = "https://github.com/RushiVivek/Diodos"

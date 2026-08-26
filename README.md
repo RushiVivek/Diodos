@@ -63,10 +63,16 @@ uv sync
 
 The installed `diodos` command is the recommended way to use the CLI. The available commands are:
 
-Launch the daemon:
+Launch the daemon in the background:
 
 ```bash
 diodos run
+```
+
+Run the daemon process in the foreground:
+
+```bash
+diodos daemon
 ```
 
 Check for a captive portal and attempt a one-time login:
@@ -85,6 +91,12 @@ Open the configuration file:
 
 ```bash
 diodos config
+```
+
+Stop a running background daemon:
+
+```bash
+diodos stop
 ```
 
 You can also run any command with `uvx` without installing the package globally. For example:

@@ -3,20 +3,41 @@ import typer
 
 from .utils.config import get_config_path, load_config, open_config_file
 from .utils.network import network_check, attempt_login, attempt_logout
+from .utils.background import launch_daemon, stop_daemon
 
-app = typer.Typer(no_args_is_help=True)
+app = typer.Typer(invoke_without_command=True, no_args_is_help=True)
 context_settings = dict(help_option_names=["-h", "--help"])
 
 @app.callback(context_settings=context_settings)
-def callback() -> None:
+def callback(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        is_eager=True,
+        help="Show the application version and exit.",
+    ),
+) -> None:
     """
     Diodos is a command-line tool that helps you automatically log in to captive portals on saved Wi-Fi networks. It monitors network connections and detects when a captive portal is present, allowing you to seamlessly authenticate without manual intervention.
     """
+    if version:
+        from diodos import __version__
+        typer.echo(f"Diodos version {__version__}")
+        raise typer.Exit()
 
 @app.command()
 def run() -> None:
     """
-    This command will start the daemon process and keep it running in the background, monitoring network connections for captive portals. When a captive portal is detected, the daemon will attempt to automatically log in using the provided credentials or configuration.
+    This command launches the diodos daemon in the background.
+    """
+    typer.echo("Launching the diodos daemon in the background...")
+    launch_daemon()
+    typer.echo("Daemon launched successfully. It will continue to monitor network connections for captive portals.")
+
+@app.command()
+def daemon() -> None:
+    """
+    This command will start the daemon process, monitoring network connections for captive portals. When a captive portal is detected, the daemon will attempt to automatically log in using the provided credentials or configuration.
     """
     try:
         config = load_config()
@@ -97,3 +118,14 @@ def config() -> None:
     typer.echo(f"Opening configuration file: {config_path}")
     open_config_file(config_path)
 
+@app.command()
+def stop() -> None:
+    """
+    This command will stop the daemon process if it is running. It is useful for gracefully shutting down the background monitoring of network connections.
+    """
+    typer.echo("Stopping the diodos daemon...")
+    daemon_stopped = stop_daemon()
+    if daemon_stopped:
+        typer.echo("Daemon stopped.")
+    else:
+        typer.echo("Failed to stop daemon.")
