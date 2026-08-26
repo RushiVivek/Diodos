@@ -1,4 +1,5 @@
 import requests
+from . import http_client
 
 def network_check(config: dict) -> bool:
     """
@@ -14,7 +15,7 @@ def network_check(config: dict) -> bool:
         return True
 
     try:
-        response = requests.get(test_url, timeout=5)
+        response = http_client.get(test_url, timeout=5)
         # Check if the response contains the expected message
         if test_msg in response.text:
             return False
@@ -36,14 +37,34 @@ def attempt_login(config: dict) -> bool:
         return False
 
     try:
-        with requests.Session() as session:
-            response = session.post(
-                login_url,
-                data=credentials,
-                timeout=5,
-                allow_redirects=True,
-            )
+        response = http_client.post(
+            login_url,
+            data=credentials,
+            timeout=5,
+            allow_redirects=True,
+        )
 
-            return response.status_code == 200
+        return response.status_code == 200
+    except requests.RequestException:
+        return False
+
+def attempt_logout(config: dict) -> bool:
+    """
+    Attempt to log out from the captive portal using the provided configuration.
+    Returns True if logout is successful, False otherwise.
+    """
+    logout_config = config.get("logout", {})
+    logout_url = logout_config.get("url")
+
+    if not logout_url:
+        return False
+
+    try:
+        response = http_client.get(
+            logout_url,
+            timeout=5,
+            allow_redirects=True,
+        )
+        return response.status_code == 200
     except requests.RequestException:
         return False

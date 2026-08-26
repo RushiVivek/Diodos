@@ -22,11 +22,6 @@ def load_config(path: str | Path | None = None) -> dict:
     config_path = Path(path).expanduser() if path else get_config_path()
 
     if not config_path.exists():
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.touch()
-        with config_path.open("w") as file:
-            with open(Path(__file__).parent / "sample.config.toml", "r") as default_file:
-                file.write(default_file.read())
         open_config_file(config_path)
         raise FileNotFoundError(f"Config file not found. Created default at: {config_path}")
 
@@ -36,6 +31,14 @@ def load_config(path: str | Path | None = None) -> dict:
 
 def open_config_file(path: str | Path) -> None:
     path = Path(path)
+
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+
+        with path.open("w") as file:
+            with open(Path(__file__).parent / "sample.config.toml", "r") as default_file:
+                file.write(default_file.read())
 
     if sys.platform == "win32":
         os.startfile(path)

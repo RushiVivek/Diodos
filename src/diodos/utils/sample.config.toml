@@ -1,3 +1,6 @@
+[network]
+SSID = "SSID"
+
 [network_check]
 url = "test_url"
 msg = "test_msg"
@@ -9,3 +12,6 @@ url = "url"
 [login.credentials]
 username = "..."
 password = "..."
+
+[logout]
+url = "url"
