@@ -31,6 +31,26 @@ uvx diodos run
 pip install diodos
 ```
 
+## Upgrade
+
+For an existing uv installation:
+
+```bash
+uv tool install -U diodos
+```
+
+For an existing pip installation:
+
+```bash
+python -m pip install --upgrade diodos
+```
+
+To run the latest published version without installing it permanently:
+
+```bash
+uvx --refresh diodos run
+```
+
 ### From source
 
 ```bash
@@ -41,11 +61,39 @@ uv sync
 
 ## Usage
 
+The installed `diodos` command is the recommended way to use the CLI. The available commands are:
+
+Launch the daemon:
+
 ```bash
 diodos run
 ```
 
-Or:
+Check for a captive portal and attempt a one-time login:
+
+```bash
+diodos login
+```
+
+Log out from the captive portal:
+
+```bash
+diodos logout
+```
+
+Open the configuration file:
+
+```bash
+diodos config
+```
+
+You can also run any command with `uvx` without installing the package globally. For example:
+
+```bash
+uvx diodos logout
+```
+
+Or run the CLI as a Python module:
 
 ```bash
 python -m diodos run
@@ -64,6 +112,9 @@ Default config path:
 Example:
 
 ```toml
+[network]
+SSID = "Example SSID"
+
 [network_check]
 url = "https://example.com"
 msg = "Success"
@@ -75,6 +126,9 @@ url = "https://portal.example.com/login"
 [login.credentials]
 username = "your-username"
 password = "your-password"
+
+[logout]
+url = "https://portal.example.com/logout"
 ```
 
 ## Development

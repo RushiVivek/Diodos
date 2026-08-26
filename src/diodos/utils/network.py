@@ -1,4 +1,6 @@
 import requests
+
+from .wifi import is_correct_network
 from . import http_client
 
 def network_check(config: dict) -> bool:
@@ -7,6 +9,10 @@ def network_check(config: dict) -> bool:
     Returns True if a captive portal is detected, False otherwise.
     """
     network_check_config = config.get("network_check", {})
+    SSID = config.get("network", {}).get("SSID")
+
+    if SSID and is_correct_network(SSID):
+        return False
     
     test_url = network_check_config.get("url")
     test_msg = network_check_config.get("msg", "Success")
