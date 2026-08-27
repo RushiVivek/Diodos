@@ -1,6 +1,6 @@
 [project]
 name = "diodos"
-version = "0.3.0"
+version = "0.3.1"
 description = "Auto detect and login to the captive portal of given networks."
 readme = "README.md"
 license = "MIT"
@@ -28,6 +28,7 @@ dependencies = [
 Homepage = "https://github.com/RushiVivek/Diodos"
 Repository = "https://github.com/RushiVivek/Diodos"
 Issues = "https://github.com/RushiVivek/Diodos/issues"
+PyPI = "https://pypi.org/project/diodos/"
 
 [project.scripts]
 diodos = "diodos.main:app"

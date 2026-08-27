@@ -1,6 +1,8 @@
-# diodos
+# Diodos
 
 `diodos` is a CLI daemon that monitors your network and automatically attempts login when a captive portal is detected.
+
+[View diodos on PyPI](https://pypi.org/project/diodos/)
 
 ## Features
 
@@ -22,13 +24,21 @@ uv tool install diodos
 Run without installing globally:
 
 ```bash
-uvx diodos run
+uvx diodos start
 ```
 
 ### With pip (alternative)
 
 ```bash
 pip install diodos
+```
+
+### From source
+
+```bash
+git clone <your-repo-url>
+cd Diodos
+uv sync
 ```
 
 ## Upgrade
@@ -48,15 +58,7 @@ python -m pip install --upgrade diodos
 To run the latest published version without installing it permanently:
 
 ```bash
-uvx --refresh diodos run
-```
-
-### From source
-
-```bash
-git clone <your-repo-url>
-cd Diodos
-uv sync
+uvx --refresh diodos start
 ```
 
 ## Usage
@@ -66,7 +68,7 @@ The installed `diodos` command is the recommended way to use the CLI. The availa
 Launch the daemon in the background:
 
 ```bash
-diodos run
+diodos start
 ```
 
 Run the daemon process in the foreground:
@@ -108,7 +110,7 @@ uvx diodos logout
 Or run the CLI as a Python module:
 
 ```bash
-python -m diodos run
+python -m diodos start
 ```
 
 On first run, `diodos` creates a default config file and opens it for editing.
