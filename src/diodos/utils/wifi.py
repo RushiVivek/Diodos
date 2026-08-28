@@ -1,6 +1,9 @@
 import re
 import subprocess
 import sys
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _run_command(command: list[str]) -> str | None:
@@ -21,6 +24,7 @@ def _run_command(command: list[str]) -> str | None:
         FileNotFoundError,
         subprocess.TimeoutExpired,
     ):
+        logger.error("Failed to run command: %s", ' '.join(command))
         return None
 
 
@@ -39,6 +43,7 @@ def _get_windows_ssid() -> str | None:
         line = line.strip()
 
         if line.startswith("SSID") and not line.startswith("BSSID"):
+            logger.debug("Found SSID line: %s", line)
             return line.split(":", 1)[1].strip()
 
     return None
@@ -59,6 +64,7 @@ def _get_linux_ssid() -> str | None:
 
     for line in output.splitlines():
         if line.startswith("yes:"):
+            logger.debug("Found active SSID line: %s", line)
             return line[4:]
 
     return None
@@ -82,6 +88,7 @@ def _get_macos_ssid() -> str | None:
                 match = re.search(r"Device:\s*(\S+)", lines[i + 1])
 
                 if match:
+                    logger.debug("Found Wi-Fi device: %s", match.group(1))
                     wifi_device = match.group(1)
 
             break
@@ -105,6 +112,7 @@ def _get_macos_ssid() -> str | None:
             ssid = line[len(prefix):].strip()
 
             if ssid and "not associated" not in ssid.lower():
+                logger.debug("Found connected SSID: %s", ssid)
                 return ssid
 
     return None
@@ -116,6 +124,7 @@ def is_correct_network(expected_ssid: str) -> bool:
     """
 
     if not expected_ssid:
+        logger.debug("No expected SSID provided.")
         return False
 
     if sys.platform == "win32":

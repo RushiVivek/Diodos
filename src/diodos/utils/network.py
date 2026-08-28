@@ -1,7 +1,11 @@
 import requests
+import logging
 
 from .wifi import is_correct_network
 from . import http_client
+
+logger = logging.getLogger(__name__)
+
 
 def network_check(config: dict) -> bool:
     """
@@ -11,23 +15,29 @@ def network_check(config: dict) -> bool:
     network_check_config = config.get("network_check", {})
     SSID = config.get("network", {}).get("SSID")
 
-    if SSID and is_correct_network(SSID):
+    if SSID and not is_correct_network(SSID):
+        logger.debug("Not connected to the expected network: %s. Skipping captive portal check.", SSID)
         return False
     
     test_url = network_check_config.get("url")
     test_msg = network_check_config.get("msg", "Success")
 
     if not test_url:
+        logger.debug("No test URL provided for network check. Assuming no captive portal.")
         return True
 
     try:
         response = http_client.get(test_url, timeout=5)
+        logger.debug("Network check response status code: %s", response.status_code)
         # Check if the response contains the expected message
         if test_msg in response.text:
+            logger.debug("No captive portal detected.")
             return False
         else:
+            logger.debug("Captive portal detected.")
             return True
     except requests.RequestException as e:
+        logger.warning("Network check failed: %s", e)
         return True
 
 def attempt_login(config: dict) -> bool:
@@ -40,6 +50,7 @@ def attempt_login(config: dict) -> bool:
     credentials = login_config.get("credentials", {})
 
     if not login_url:
+        logger.debug("No login URL provided.")
         return False
 
     try:
@@ -49,9 +60,10 @@ def attempt_login(config: dict) -> bool:
             timeout=5,
             allow_redirects=True,
         )
-
+        logger.debug("Login response status code: %s", response.status_code)
         return response.status_code == 200
-    except requests.RequestException:
+    except requests.RequestException as e:
+        logger.error("Error occurred while attempting login: %s", e)
         return False
 
 def attempt_logout(config: dict) -> bool:
@@ -63,6 +75,7 @@ def attempt_logout(config: dict) -> bool:
     logout_url = logout_config.get("url")
 
     if not logout_url:
+        logger.debug("No logout URL provided.")
         return False
 
     try:
@@ -71,6 +84,8 @@ def attempt_logout(config: dict) -> bool:
             timeout=5,
             allow_redirects=True,
         )
+        logger.debug("Logout response status code: %s", response.status_code)
         return response.status_code == 200
-    except requests.RequestException:
+    except requests.RequestException as e:
+        logger.error("Error occurred while attempting logout: %s", e)
         return False

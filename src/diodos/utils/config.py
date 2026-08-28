@@ -2,8 +2,11 @@ import os
 import sys
 import subprocess
 from pathlib import Path
+import logging
 
 from tomlkit import load
+
+logger = logging.getLogger(__name__)
 
 
 def get_config_path() -> Path:
@@ -14,6 +17,7 @@ def get_config_path() -> Path:
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
 
+    logger.debug("Determined configuration path: %s", base / "diodos" / "config.toml")
     return base / "diodos" / "config.toml"
 
 
@@ -22,6 +26,7 @@ def load_config(path: str | Path | None = None) -> dict:
     config_path = Path(path).expanduser() if path else get_config_path()
 
     if not config_path.exists():
+        logger.debug("Config file not found.")
         open_config_file(config_path)
         raise FileNotFoundError(f"Config file not found. Created default at: {config_path}")
 
@@ -36,10 +41,12 @@ def open_config_file(path: str | Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
 
+        logger.debug("Creating default config file at: %s", path)
         with path.open("w") as file:
             with open(Path(__file__).parent / "sample.config.toml", "r") as default_file:
                 file.write(default_file.read())
 
+    logger.debug("Opening configuration file: %s", path)
     if sys.platform == "win32":
         os.startfile(path)
     elif sys.platform == "darwin":
