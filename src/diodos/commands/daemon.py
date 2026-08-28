@@ -1,7 +1,10 @@
+import os
 import time
+
 import typer
 import logging
 
+from diodos.utils.background import clear_daemon_pid, record_daemon_pid
 from diodos.utils.config import load_config
 from diodos.utils.network import network_check, attempt_login
 
@@ -14,7 +17,7 @@ def main() -> None:
     """
     logger.debug("Starting the daemon process.")
     try:
-        config = load_config()
+        config = load_config(create_if_missing=False)
     except FileNotFoundError as e:
         typer.echo(f"Error: {e}")
         logger.error("Configuration file not found: %s", e)
@@ -24,6 +27,7 @@ def main() -> None:
     logger.info("Starting the diodos daemon...")
     interval = config.get("network_check", {}).get("interval", 60)
     logger.debug("Network check interval set to %s seconds.", interval)
+    record_daemon_pid(os.getpid())
 
     try:
         next_run = time.monotonic()
@@ -50,3 +54,5 @@ def main() -> None:
         typer.echo("\nDaemon stopped by user.")
         logger.info("Daemon stopped by user.")
         raise typer.Exit(code=0)
+    finally:
+        clear_daemon_pid()
