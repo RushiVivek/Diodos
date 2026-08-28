@@ -1,9 +1,12 @@
 import typer
+import logging
 
 from .commands import daemon, login, logout, config, start, stop
+from .utils.logger import setup_logging
 
 app = typer.Typer(invoke_without_command=True, no_args_is_help=True)
 context_settings = dict(help_option_names=["-h", "--help"])
+
 
 @app.callback(context_settings=context_settings)
 def callback(
@@ -17,10 +20,15 @@ def callback(
     """
     Diodos is a command-line tool that helps you automatically log in to captive portals on saved Wi-Fi networks. It monitors network connections and detects when a captive portal is present, allowing you to seamlessly authenticate without manual intervention.
     """
+    setup_logging()
+    logger = logging.getLogger(__name__)
+
     if version:
+        logger.debug("Displaying version information.")
         from diodos import __version__
         typer.echo(f"Diodos version {__version__}")
         raise typer.Exit()
+
 
 app.command("start")(start.main)
 app.command("stop")(stop.main)

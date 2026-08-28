@@ -1,42 +1,58 @@
 import json
+import logging
 import os
 import tempfile
-from pathlib import Path
 
 import requests
-import fcntl
+from filelock import FileLock, Timeout
 
 from .config import get_config_path
+
+logger = logging.getLogger(__name__)
 
 CONFIG_PATH = get_config_path().parent
 COOKIE_FILE = CONFIG_PATH / "cookies.json"
 LOCK_FILE = CONFIG_PATH / "cookies.lock"
 
 
-def _load_cookies(session):
+def _load_cookies(session: requests.Session) -> None:
+    logger.debug("Loading cookies from %s.", COOKIE_FILE)
+
     if not COOKIE_FILE.exists():
+        logger.debug("Cookie file does not exist at %s. No cookies to load.", COOKIE_FILE)
         return
 
-    with COOKIE_FILE.open("r", encoding="utf-8") as f:
-        fcntl.flock(f, fcntl.LOCK_SH)
+    try:
+        with FileLock(LOCK_FILE, timeout=5):
+            with COOKIE_FILE.open("r", encoding="utf-8") as f:
+                cookies = json.load(f)
+    except Timeout:
+        logger.error("Timeout occurred while trying to acquire lock for loading cookies.")
+        return
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error(
+            "Error occurred while loading cookies from %s: %s",
+            COOKIE_FILE,
+            e,
+        )
+        return
 
-        try:
-            cookies = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            cookies = []
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+    # Remove cookies that may have been deleted/changed on disk.
+    session.cookies.clear()
 
     for cookie in cookies:
-        session.cookies.set(
-            cookie["name"],
-            cookie["value"],
-            domain=cookie.get("domain"),
-            path=cookie.get("path", "/"),
-        )
+        try:
+            session.cookies.set(
+                cookie["name"],
+                cookie["value"],
+                domain=cookie.get("domain"),
+                path=cookie.get("path", "/"),
+            )
+        except (KeyError, TypeError) as e:
+            logger.warning("Invalid cookie: %s", e)
 
 
-def _save_cookies(session):
+def _save_cookies(session: requests.Session) -> None:
     cookies = [
         {
             "name": c.name,
@@ -47,30 +63,31 @@ def _save_cookies(session):
         for c in session.cookies
     ]
 
-    with LOCK_FILE.open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    logger.debug("Saving cookies to %s.", COOKIE_FILE)
 
-        # Atomic replacement
-        fd, temp_path = tempfile.mkstemp(
-            dir=COOKIE_FILE.parent,
-            prefix=".cookies.",
-            suffix=".tmp",
-        )
+    CONFIG_PATH.mkdir(parents=True, exist_ok=True)
 
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(cookies, f, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
+    try:
+        with FileLock(LOCK_FILE, timeout=5):
+            fd, temp_path = tempfile.mkstemp(
+                dir=COOKIE_FILE.parent,
+                prefix=".cookies.",
+                suffix=".tmp",
+            )
 
-            os.replace(temp_path, COOKIE_FILE)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(cookies, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
 
-        finally:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
+                os.replace(temp_path, COOKIE_FILE)
 
-        fcntl.flock(lock, fcntl.LOCK_UN)
-
+            finally:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+    except Timeout:
+        logger.error("Timeout occurred while trying to acquire lock for saving cookies.")
 
 session = requests.Session()
 _load_cookies(session)
