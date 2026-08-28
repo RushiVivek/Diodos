@@ -158,9 +158,10 @@ terminal that started it is closed and no console window appears. Use
 `diodos stop` to shut it down. The current SSID is read with `netsh wlan show
 interfaces`.
 
-If `diodos config` cannot open `config.toml` because `.toml` has no associated
-program, it falls back to Notepad. Setting `EDITOR` (or `VISUAL`) overrides the
-choice on every platform.
+`.toml` has no associated program on a default Windows install, so the first
+`diodos config` opens Windows' own "How do you want to open this file?" picker.
+Choose an editor there, and tick the box to remember it. Setting `EDITOR` (or
+`VISUAL`) bypasses the picker and overrides the choice on every platform.
 
 ### macOS and Linux
 

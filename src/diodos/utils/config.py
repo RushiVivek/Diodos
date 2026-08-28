@@ -58,26 +58,6 @@ def load_config(
         return load(file).unwrap()
 
 
-def _windows_has_association(path: Path) -> bool:
-    """
-    Return True if Explorer knows a program for this file type.
-
-    os.startfile() cannot be relied on to raise for an unassociated extension:
-    on Windows 11 it returns successfully having opened nothing. .toml has no
-    handler on a default install, so the association is checked up front.
-    """
-    try:
-        import ctypes
-
-        buffer = ctypes.create_unicode_buffer(1024)
-        # FindExecutableW returns a value above 32 only when a handler exists.
-        result = ctypes.windll.shell32.FindExecutableW(str(path), None, buffer)
-
-        return result > 32
-    except Exception:
-        return False
-
-
 def open_config_file(path: str | Path) -> None:
     path = Path(path)
 
@@ -102,16 +82,10 @@ def open_config_file(path: str | Path) -> None:
 
     logger.debug("Opening configuration file: %s", path)
     if sys.platform == "win32":
-        if _windows_has_association(path):
-            try:
-                os.startfile(path)
-                return
-            except OSError:
-                pass
-
-        # Notepad is always present. Popen rather than run, to match the
-        # non-blocking behaviour of os.startfile.
-        subprocess.Popen(["notepad.exe", str(path)])
+        # No fallback on purpose: with no .toml association Windows shows its
+        # own "How do you want to open this file?" picker, which lets the user
+        # choose an editor and remember it.
+        os.startfile(path)
     elif sys.platform == "darwin":
         subprocess.run(["open", str(path)], check=False)
     else:
