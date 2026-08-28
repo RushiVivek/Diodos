@@ -116,135 +116,168 @@ def make_noop_editor(directory):
     return editor
 
 
+def stop_any_daemon():
+    """
+    Best effort teardown, so a failed check never leaves a detached daemon
+    running after this process exits.
+    """
+    try:
+        from diodos.utils import background
+
+        for proc in background._daemon_processes():
+            try:
+                proc.kill()
+                print(f"    (cleanup: killed leftover daemon {proc.pid})")
+            except Exception as exc:  # noqa: BLE001 - teardown must not raise
+                print(f"    (cleanup: could not kill {proc.pid}: {exc})")
+
+        background.clear_daemon_pid()
+    except Exception as exc:  # noqa: BLE001 - teardown must not raise
+        print(f"    (cleanup: daemon teardown failed: {exc})")
+
+
+def run_checks(tmp, port):
+    """Every assertion. Raises SystemExit(1) on the first failure."""
+    config_dir = Path(tmp) / "diodos"
+    config_dir.mkdir(parents=True)
+    os.environ["DIODOS_CONFIG_DIR"] = str(config_dir)
+    os.environ["EDITOR"] = str(make_noop_editor(Path(tmp)))
+    os.environ.pop("VISUAL", None)
+
+    from diodos.utils import background, http_client
+    from diodos.utils.config import get_config_path, open_config_file
+
+    config_path = get_config_path()
+    check("config path honours DIODOS_CONFIG_DIR", config_path.parent == config_dir)
+
+    # A default config is written and parses back.
+    import diodos.utils.config as config_module
+
+    open_config_file(config_path)
+    check("default config created", config_path.exists())
+    check("default config parses", "network_check" in config_module.load_config())
+
+    # Real config, deliberately written with a BOM.
+    write_config(config_path, port, bom=True)
+    check("BOM-prefixed config parses", "login" in config_module.load_config())
+
+    # Cookie jar: locking, atomic replace, no leftovers.
+    import requests
+
+    session = requests.Session()
+    session.cookies.set("token", "abc", domain="127.0.0.1", path="/")
+    http_client._save_cookies(session)
+
+    reloaded = requests.Session()
+    http_client._load_cookies(reloaded)
+    check("cookies round-trip", reloaded.cookies.get("token") == "abc")
+
+    errors = []
+
+    def hammer(write):
+        try:
+            for _ in range(25):
+                if write:
+                    http_client._save_cookies(session)
+                else:
+                    http_client._load_cookies(requests.Session())
+        except Exception as exc:  # noqa: BLE001 - reported, then fails the run
+            errors.append(repr(exc))
+
+    threads = [threading.Thread(target=hammer, args=(i % 2 == 0,)) for i in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    check(f"concurrent cookie access is safe {errors}", not errors)
+    check("no temp files left behind", not list(config_dir.glob(".cookies.*.tmp")))
+
+    # A configured SSID we are not joined to must suppress the login.
+    write_config(config_path, port, ssid="diodos-no-such-network")
+    check(
+        "login skipped on the wrong network",
+        "No captive portal" in run_cli("login").stdout,
+    )
+    check("portal saw no login attempt", state["logins"] == 0)
+
+    # One-shot login and logout against the portal.
+    write_config(config_path, port, bom=True)
+    check("login reports success", "Login successful" in run_cli("login").stdout)
+    check("portal saw the login", state["logins"] == 1)
+    check("second login is a no-op", "No captive portal" in run_cli("login").stdout)
+    check("logout reports success", "Logout successful" in run_cli("logout").stdout)
+    check("portal saw the logout", state["logouts"] == 1)
+
+    # The daemon runs detached, so it must fail on a missing config rather
+    # than take the branch that creates one and opens a text editor.
+    missing = Path(tmp) / "absent"
+    os.environ["DIODOS_CONFIG_DIR"] = str(missing)
+
+    result = run_cli("daemon")
+    check("daemon without a config exits non-zero", result.returncode == 1)
+    check("daemon says how to fix it", "Run `diodos config`" in result.stdout)
+    # The directory itself is expected: setup_logging() creates it for
+    # info.log and debug.log. What must not appear is a config, since
+    # writing one is the step that goes on to launch an editor.
+    check("daemon created no config of its own", not (missing / "config.toml").exists())
+
+    # `start` runs in the foreground, so it may set up a first-run config,
+    # but it must not report a launch it did not manage.
+    result = run_cli("start")
+    check("start without a config exits non-zero", result.returncode == 1)
+    check("start did not claim to launch", "launched successfully" not in result.stdout)
+    check("start left no daemon behind", not (missing / "diodos.pid").exists())
+
+    os.environ["DIODOS_CONFIG_DIR"] = str(config_dir)
+
+    # Background daemon.
+    check("start reports launch", "launched successfully" in run_cli("start").stdout)
+    check("pid file written", background.PID_FILE.exists())
+
+    if sys.platform == "win32" and Path(background._daemon_interpreter()).name == "pythonw.exe":
+        # Console-subsystem python.exe would be handed a fresh console
+        # window, which a venv's launcher stub re-triggers for its child.
+        import psutil
+
+        daemon_exe = psutil.Process(
+            int(background.PID_FILE.read_text(encoding="utf-8"))
+        ).exe()
+        check(
+            f"daemon runs windowless under pythonw.exe (got {Path(daemon_exe).name})",
+            Path(daemon_exe).name.lower() == "pythonw.exe",
+        )
+    check("duplicate start refused", "already running" in run_cli("start").stdout)
+
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline and state["logins"] < 2:
+        time.sleep(0.5)
+    check("daemon logged in on its own", state["logins"] >= 2)
+
+    check("stop reports success", "Daemon stopped" in run_cli("stop").stdout)
+    time.sleep(2)
+    check("pid file cleaned up", not background.PID_FILE.exists())
+    check("daemon is gone", not background._daemon_processes())
+    check("stop on an idle machine is graceful", "No running" in run_cli("stop").stdout)
+
+
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 0), PortalHandler)
     port = server.server_address[1]
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    with tempfile.TemporaryDirectory() as tmp:
-        config_dir = Path(tmp) / "diodos"
-        config_dir.mkdir(parents=True)
-        os.environ["DIODOS_CONFIG_DIR"] = str(config_dir)
-        os.environ["EDITOR"] = str(make_noop_editor(Path(tmp)))
-        os.environ.pop("VISUAL", None)
-
-        from diodos.utils import background, http_client
-        from diodos.utils.config import get_config_path, open_config_file
-
-        config_path = get_config_path()
-        check("config path honours DIODOS_CONFIG_DIR", config_path.parent == config_dir)
-
-        # A default config is written and parses back.
-        import diodos.utils.config as config_module
-
-        open_config_file(config_path)
-        check("default config created", config_path.exists())
-        check("default config parses", "network_check" in config_module.load_config())
-
-        # Real config, deliberately written with a BOM.
-        write_config(config_path, port, bom=True)
-        check("BOM-prefixed config parses", "login" in config_module.load_config())
-
-        # Cookie jar: locking, atomic replace, no leftovers.
-        import requests
-
-        session = requests.Session()
-        session.cookies.set("token", "abc", domain="127.0.0.1", path="/")
-        http_client._save_cookies(session)
-
-        reloaded = requests.Session()
-        http_client._load_cookies(reloaded)
-        check("cookies round-trip", reloaded.cookies.get("token") == "abc")
-
-        errors = []
-
-        def hammer(write):
+    try:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             try:
-                for _ in range(25):
-                    if write:
-                        http_client._save_cookies(session)
-                    else:
-                        http_client._load_cookies(requests.Session())
-            except Exception as exc:  # noqa: BLE001 - reported, then fails the run
-                errors.append(repr(exc))
-
-        threads = [threading.Thread(target=hammer, args=(i % 2 == 0,)) for i in range(6)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-
-        check(f"concurrent cookie access is safe {errors}", not errors)
-        check("no temp files left behind", not list(config_dir.glob(".cookies.*.tmp")))
-
-        # A configured SSID we are not joined to must suppress the login.
-        write_config(config_path, port, ssid="diodos-no-such-network")
-        check(
-            "login skipped on the wrong network",
-            "No captive portal" in run_cli("login").stdout,
-        )
-        check("portal saw no login attempt", state["logins"] == 0)
-
-        # One-shot login and logout against the portal.
-        write_config(config_path, port, bom=True)
-        check("login reports success", "Login successful" in run_cli("login").stdout)
-        check("portal saw the login", state["logins"] == 1)
-        check("second login is a no-op", "No captive portal" in run_cli("login").stdout)
-        check("logout reports success", "Logout successful" in run_cli("logout").stdout)
-        check("portal saw the logout", state["logouts"] == 1)
-
-        # The daemon runs detached, so it must fail on a missing config rather
-        # than take the branch that creates one and opens a text editor.
-        missing = Path(tmp) / "absent"
-        os.environ["DIODOS_CONFIG_DIR"] = str(missing)
-
-        result = run_cli("daemon")
-        check("daemon without a config exits non-zero", result.returncode == 1)
-        check("daemon says how to fix it", "Run `diodos config`" in result.stdout)
-        # The directory itself is expected: setup_logging() creates it for
-        # info.log and debug.log. What must not appear is a config, since
-        # writing one is the step that goes on to launch an editor.
-        check("daemon created no config of its own", not (missing / "config.toml").exists())
-
-        # `start` runs in the foreground, so it may set up a first-run config,
-        # but it must not report a launch it did not manage.
-        result = run_cli("start")
-        check("start without a config exits non-zero", result.returncode == 1)
-        check("start did not claim to launch", "launched successfully" not in result.stdout)
-        check("start left no daemon behind", not (missing / "diodos.pid").exists())
-
-        os.environ["DIODOS_CONFIG_DIR"] = str(config_dir)
-
-        # Background daemon.
-        check("start reports launch", "launched successfully" in run_cli("start").stdout)
-        check("pid file written", background.PID_FILE.exists())
-
-        if sys.platform == "win32" and Path(background._daemon_interpreter()).name == "pythonw.exe":
-            # Console-subsystem python.exe would be handed a fresh console
-            # window, which a venv's launcher stub re-triggers for its child.
-            import psutil
-
-            daemon_exe = psutil.Process(
-                int(background.PID_FILE.read_text(encoding="utf-8"))
-            ).exe()
-            check(
-                f"daemon runs windowless under pythonw.exe (got {Path(daemon_exe).name})",
-                Path(daemon_exe).name.lower() == "pythonw.exe",
-            )
-        check("duplicate start refused", "already running" in run_cli("start").stdout)
-
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline and state["logins"] < 2:
-            time.sleep(0.5)
-        check("daemon logged in on its own", state["logins"] >= 2)
-
-        check("stop reports success", "Daemon stopped" in run_cli("stop").stdout)
-        time.sleep(2)
-        check("pid file cleaned up", not background.PID_FILE.exists())
-        check("daemon is gone", not background._daemon_processes())
-        check("stop on an idle machine is graceful", "No running" in run_cli("stop").stdout)
-
+                run_checks(tmp, port)
+            finally:
+                # Runs even when a check fails, so the detached daemon cannot
+                # outlive this process. Must happen before the temporary
+                # directory holding its config and PID file disappears.
+                stop_any_daemon()
+    finally:
         server.shutdown()
+        server.server_close()
 
     print("\nAll smoke checks passed.")
 
