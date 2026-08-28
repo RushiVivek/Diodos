@@ -6,16 +6,44 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _console_encoding() -> str:
+    """
+    Encoding used by console tools whose output we capture.
+
+    Windows console programs write their output in the OEM code page, not
+    UTF-8, so decoding as UTF-8 mangles non-ASCII SSIDs.
+    """
+    if sys.platform != "win32":
+        return "utf-8"
+
+    try:
+        import ctypes
+
+        return f"cp{ctypes.windll.kernel32.GetOEMCP()}"
+    except Exception:
+        import locale
+
+        return locale.getpreferredencoding(False)
+
+
 def _run_command(command: list[str]) -> str | None:
+    kwargs = {}
+
+    if sys.platform == "win32":
+        # The daemon runs detached, so without this each poll flashes a console
+        # window on screen.
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
     try:
         result = subprocess.run(
             command,
             capture_output=True,
             text=True,
-            encoding="utf-8",
-            errors="ignore",
+            encoding=_console_encoding(),
+            errors="replace",
             timeout=5,
             check=True,
+            **kwargs,
         )
         return result.stdout
 
@@ -23,6 +51,7 @@ def _run_command(command: list[str]) -> str | None:
         subprocess.CalledProcessError,
         FileNotFoundError,
         subprocess.TimeoutExpired,
+        OSError,
     ):
         logger.error("Failed to run command: %s", ' '.join(command))
         return None
@@ -42,9 +71,20 @@ def _get_windows_ssid() -> str | None:
     for line in output.splitlines():
         line = line.strip()
 
-        if line.startswith("SSID") and not line.startswith("BSSID"):
+        if not line.startswith("SSID") or line.startswith("BSSID"):
+            continue
+
+        label, separator, value = line.partition(":")
+
+        # Only the "SSID : <name>" row, not "SSID name" or similar.
+        if not separator or label.strip() != "SSID":
+            continue
+
+        value = value.strip()
+
+        if value:
             logger.debug("Found SSID line: %s", line)
-            return line.split(":", 1)[1].strip()
+            return value
 
     return None
 

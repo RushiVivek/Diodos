@@ -10,6 +10,7 @@
 - Detects likely captive-portal redirects.
 - Submits configured credentials automatically.
 - Works with `python -m diodos` and the installed `diodos` command.
+- Runs on Windows, macOS and Linux.
 
 ## Installation
 
@@ -123,6 +124,9 @@ Default config path:
 - macOS: `~/Library/Application Support/diodos/config.toml`
 - Windows: `%APPDATA%/diodos/config.toml`
 
+Set `DIODOS_CONFIG_DIR` to keep the config, cookie jar and PID file somewhere
+else. The file may be saved as UTF-8 with or without a byte order mark.
+
 Example:
 
 ```toml
@@ -145,6 +149,26 @@ password = "your-password"
 url = "https://portal.example.com/logout"
 ```
 
+## Platform notes
+
+### Windows
+
+`diodos start` launches the daemon detached, so it keeps running after the
+terminal that started it is closed and no console window appears. Use
+`diodos stop` to shut it down. The current SSID is read with `netsh wlan show
+interfaces`.
+
+`.toml` has no associated program on a default Windows install, so the first
+`diodos config` opens Windows' own "How do you want to open this file?" picker.
+Choose an editor there, and tick the box to remember it. Setting `EDITOR` (or
+`VISUAL`) bypasses the picker and overrides the choice on every platform.
+
+### macOS and Linux
+
+The SSID is read with `networksetup` on macOS and `nmcli` on Linux. If neither
+is available the SSID check is skipped and connectivity alone decides whether
+to log in.
+
 ## Development
 
 Build distributables:
@@ -157,4 +181,11 @@ Validate package metadata:
 
 ```bash
 uvx twine check dist/*
+```
+
+Run the cross-platform smoke test, which exercises config discovery, the
+cookie jar and daemon control against a local stand-in portal:
+
+```bash
+python tests/smoke_test.py
 ```

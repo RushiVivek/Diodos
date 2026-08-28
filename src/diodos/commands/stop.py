@@ -18,5 +18,5 @@ def main() -> None:
         typer.echo("Daemon stopped.")
         logger.info("Daemon stopped.")
     else:
-        typer.echo("Failed to stop daemon.")
-        logger.error("Failed to stop daemon.")
+        typer.echo("No running diodos daemon found.")
+        logger.info("No running diodos daemon found.")
