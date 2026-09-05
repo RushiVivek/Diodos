@@ -1,12 +1,12 @@
 [project]
 name = "diodos"
-version = "0.3.2"
+version = "0.4.0"
 description = "Auto detect and login to the captive portal of given networks."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "RushiVivek", email = "rushivivek123@gmail.com" }]
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 keywords = ["captive-portal", "network", "cli", "automation", "wifi"]
 classifiers = [
     "Development Status :: 3 - Alpha",
