@@ -1,7 +1,7 @@
 import typer
 import logging
 
-from diodos.utils.background import stop_daemon
+from diodos.utils.background import DaemonError, stop_daemon
 
 logger = logging.getLogger(__name__)
 
@@ -12,11 +12,12 @@ def main() -> None:
     """
     logger.debug("Starting the stop command.")
     typer.echo("Stopping the diodos daemon...")
-    logger.info("Stopping the diodos daemon.")
-    daemon_stopped = stop_daemon()
-    if daemon_stopped:
-        typer.echo("Daemon stopped.")
-        logger.info("Daemon stopped.")
-    else:
-        typer.echo("No running diodos daemon found.")
-        logger.info("No running diodos daemon found.")
+
+    try:
+        stopped = stop_daemon()
+    except DaemonError as e:
+        typer.echo(f"Error: {e}")
+        logger.error("%s", e)
+        raise typer.Exit(code=1)
+
+    typer.echo("Daemon stopped." if stopped else "No running diodos daemon found.")

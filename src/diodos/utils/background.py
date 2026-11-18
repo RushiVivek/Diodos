@@ -1,16 +1,46 @@
+"""
+Background daemon control.
+
+The running daemon holds an exclusive lock on LOCK_FILE for its whole life,
+and the OS drops that lock the moment the process dies, however it dies. So
+"is a daemon running?" is answered by trying the lock, with no process-table
+scanning, and a PID left behind by a crashed daemon can never be mistaken for
+a live one. This also keeps diodos free of compiled dependencies, which is
+what lets it install on Android under Termux.
+"""
+
+import contextlib
 import logging
 import os
+import signal
 import subprocess
 import sys
+import time
+from collections.abc import Iterator
 from pathlib import Path
 
-import psutil
+from filelock import FileLock, Timeout
 
 from .config import get_config_path
 
 logger = logging.getLogger(__name__)
 
-PID_FILE = get_config_path().parent / "diodos.pid"
+STATE_DIR = get_config_path().parent
+PID_FILE = STATE_DIR / "diodos.pid"
+LOCK_FILE = STATE_DIR / "daemon.lock"
+
+# How long `start` waits for a freshly launched daemon to take the lock, and
+# `stop` waits for one to exit.
+STARTUP_TIMEOUT = 15
+SHUTDOWN_TIMEOUT = 5
+
+
+class DaemonError(Exception):
+    """Starting or stopping the daemon did not work."""
+
+
+class AlreadyRunning(DaemonError):
+    pass
 
 
 def _daemon_interpreter() -> str:
@@ -32,88 +62,23 @@ def _daemon_interpreter() -> str:
     return str(pythonw) if pythonw.exists() else sys.executable
 
 
-def _is_daemon_cmdline(cmdline: list[str] | None) -> bool:
-    """Return True if a process command line looks like `diodos daemon`."""
-    if not cmdline:
-        return False
-
-    tokens = [token.lower() for token in cmdline]
-
-    return "daemon" in tokens and any("diodos" in token for token in tokens)
-
-
-def _daemon_processes() -> list[psutil.Process]:
-    """Find running diodos daemons, preferring the recorded PID."""
-    own_pids = {os.getpid()}
+def is_daemon_running() -> bool:
+    lock = FileLock(LOCK_FILE)
 
     try:
-        pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+        lock.acquire(timeout=0)
+    except Timeout:
+        return True
+
+    lock.release()
+    return False
+
+
+def read_daemon_pid() -> int | None:
+    try:
+        return int(PID_FILE.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
-        pid = None
-
-    if pid is not None and pid not in own_pids:
-        try:
-            proc = psutil.Process(pid)
-            if _is_daemon_cmdline(proc.cmdline()):
-                logger.debug("Found diodos daemon %s from %s.", pid, PID_FILE)
-                return [proc]
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-
-    # Stale or missing PID file: fall back to scanning.
-    logger.debug("No usable PID file, scanning processes for a diodos daemon.")
-    found = []
-    for proc in psutil.process_iter(["cmdline"]):
-        if proc.pid in own_pids:
-            continue
-        try:
-            if _is_daemon_cmdline(proc.info["cmdline"]):
-                logger.debug(
-                    "Found diodos daemon process: %s with command line: %s",
-                    proc.pid,
-                    " ".join(proc.info["cmdline"]),
-                )
-                found.append(proc)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-
-    return found
-
-
-def _matching_ancestors(proc: psutil.Process) -> list[psutil.Process]:
-    """
-    Walk up through parents that are also `diodos daemon` processes.
-
-    On Windows a venv's Scripts/python.exe is a launcher stub that runs the
-    real interpreter as a child, so the daemon shows up as two processes with
-    identical command lines.
-    """
-    ancestors = []
-    own_pid = os.getpid()
-
-    try:
-        parent = proc.parent()
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
-        return ancestors
-
-    while parent is not None and parent.pid != own_pid:
-        try:
-            if not _is_daemon_cmdline(parent.cmdline()):
-                break
-            ancestors.append(parent)
-            parent = parent.parent()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            break
-
-    return ancestors
-
-
-def record_daemon_pid(pid: int) -> None:
-    try:
-        PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-        PID_FILE.write_text(str(pid), encoding="utf-8")
-    except OSError as e:
-        logger.warning("Could not write PID file %s: %s", PID_FILE, e)
+        return None
 
 
 def clear_daemon_pid() -> None:
@@ -123,17 +88,39 @@ def clear_daemon_pid() -> None:
         logger.warning("Could not remove PID file %s: %s", PID_FILE, e)
 
 
-def launch_daemon() -> bool:
+@contextlib.contextmanager
+def daemon_lock() -> Iterator[None]:
     """
-    Launch the diodos daemon in the background.
-
-    Returns False if a daemon is already running.
+    Held by the daemon process for as long as it runs. Raises AlreadyRunning
+    if another daemon holds it, so two can never run at once.
     """
-    logger.debug("Launching diodos daemon in the background.")
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    lock = FileLock(LOCK_FILE)
 
-    if _daemon_processes():
-        logger.info("A diodos daemon is already running.")
-        return False
+    try:
+        lock.acquire(timeout=0)
+    except Timeout:
+        raise AlreadyRunning("A diodos daemon is already running.") from None
+
+    try:
+        # Written by the daemon itself, never by the launcher: on Windows the
+        # launched process can be a venv stub whose PID is not the daemon's.
+        PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+        yield
+    finally:
+        clear_daemon_pid()
+        lock.release()
+
+
+def launch_daemon() -> None:
+    """
+    Launch the diodos daemon in the background and wait until it is running.
+
+    Raises AlreadyRunning if one is already up, or DaemonError if the new one
+    exits or does not come up in time.
+    """
+    if is_daemon_running():
+        raise AlreadyRunning("A diodos daemon is already running.")
 
     kwargs = {
         "stdin": subprocess.DEVNULL,
@@ -156,54 +143,63 @@ def launch_daemon() -> bool:
     # Invoking the interpreter directly avoids depending on the `diodos`
     # console script being on PATH, which is not guaranteed on Windows.
     proc = subprocess.Popen([_daemon_interpreter(), "-m", "diodos", "daemon"], **kwargs)
-    record_daemon_pid(proc.pid)
 
+    deadline = time.monotonic() + STARTUP_TIMEOUT
+    while time.monotonic() < deadline:
+        if is_daemon_running() and read_daemon_pid() is not None:
+            return
+        if proc.poll() is not None:
+            raise DaemonError(
+                f"The daemon exited during startup (code {proc.returncode}). "
+                f"See the logs in {STATE_DIR}."
+            )
+        time.sleep(0.1)
+
+    raise DaemonError(f"The daemon did not start within {STARTUP_TIMEOUT} seconds.")
+
+
+def _wait_for_exit(timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while is_daemon_running():
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
     return True
 
 
 def stop_daemon() -> bool:
     """
-    Stop the diodos daemon if it is running.
+    Stop the running daemon. Returns False if none was running.
     """
-    logger.debug("Attempting to stop diodos daemon if it is running.")
-
-    processes = _daemon_processes()
-
-    if not processes:
+    if not is_daemon_running():
         logger.info("No running diodos daemon found.")
         clear_daemon_pid()
         return False
 
-    targets = []
-    for proc in processes:
-        try:
-            targets.extend(proc.children(recursive=True))
-            targets.append(proc)
-            targets.extend(_matching_ancestors(proc))
-        except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-            logger.warning("Could not inspect process %s: %s", proc.pid, e)
+    pid = read_daemon_pid()
+    if pid is None:
+        raise DaemonError(f"A daemon holds {LOCK_FILE} but {PID_FILE} is missing.")
 
-    # De-duplicate while keeping children ahead of their parents.
-    seen = set()
-    targets = [p for p in targets if not (p.pid in seen or seen.add(p.pid))]
+    # SIGTERM lets a POSIX daemon clean up. On Windows os.kill with any signal
+    # but the console-control ones is TerminateProcess, a hard kill; a venv
+    # launcher stub waiting on the daemon then exits with it.
+    logger.debug("Sending SIGTERM to daemon %s.", pid)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except OSError as e:
+        raise DaemonError(f"Could not signal daemon {pid}: {e}") from e
 
-    for proc in targets:
-        try:
-            proc.terminate()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
+    if not _wait_for_exit(SHUTDOWN_TIMEOUT) and sys.platform != "win32":
+        logger.warning("Daemon %s ignored SIGTERM. Killing it.", pid)
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+        _wait_for_exit(SHUTDOWN_TIMEOUT)
 
-    _, alive = psutil.wait_procs(targets, timeout=5)
-
-    # Windows terminate() is already a hard kill, but a POSIX daemon may ignore
-    # SIGTERM while it is inside a request.
-    for proc in alive:
-        try:
-            proc.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-            logger.error("Failed to stop diodos daemon process %s: %s", proc.pid, e)
+    if is_daemon_running():
+        raise DaemonError(f"Daemon {pid} is still running.")
 
     clear_daemon_pid()
     logger.info("Diodos daemon stopped.")
-
     return True

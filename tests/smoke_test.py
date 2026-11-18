@@ -124,16 +124,20 @@ def stop_any_daemon():
     try:
         from diodos.utils import background
 
-        for proc in background._daemon_processes():
-            try:
-                proc.kill()
-                print(f"    (cleanup: killed leftover daemon {proc.pid})")
-            except Exception as exc:  # noqa: BLE001 - teardown must not raise
-                print(f"    (cleanup: could not kill {proc.pid}: {exc})")
-
-        background.clear_daemon_pid()
+        if background.stop_daemon():
+            print("    (cleanup: stopped leftover daemon)")
     except Exception as exc:  # noqa: BLE001 - teardown must not raise
         print(f"    (cleanup: daemon teardown failed: {exc})")
+
+
+def windows_image_name(pid):
+    """Executable name of a Windows process, without needing psutil."""
+    out = subprocess.run(
+        ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    return out.split(",")[0].strip().strip('"')
 
 
 def run_checks(tmp, port):
@@ -233,21 +237,16 @@ def run_checks(tmp, port):
 
     # Background daemon.
     check("start reports launch", "launched successfully" in run_cli("start").stdout)
-    check("pid file written", background.PID_FILE.exists())
+    check("pid file written", background.read_daemon_pid() is not None)
+    check("daemon holds its lock", background.is_daemon_running())
 
     if sys.platform == "win32" and Path(background._daemon_interpreter()).name == "pythonw.exe":
         # Console-subsystem python.exe would be handed a fresh console
         # window, which a venv's launcher stub re-triggers for its child.
-        import psutil
-
-        daemon_exe = psutil.Process(
-            int(background.PID_FILE.read_text(encoding="utf-8"))
-        ).exe()
-        check(
-            f"daemon runs windowless under pythonw.exe (got {Path(daemon_exe).name})",
-            Path(daemon_exe).name.lower() == "pythonw.exe",
-        )
+        image = windows_image_name(background.read_daemon_pid())
+        check(f"daemon runs windowless under pythonw.exe (got {image})", image.lower() == "pythonw.exe")
     check("duplicate start refused", "already running" in run_cli("start").stdout)
+    check("duplicate daemon refused", run_cli("daemon").returncode == 1)
 
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline and state["logins"] < 2:
@@ -255,9 +254,8 @@ def run_checks(tmp, port):
     check("daemon logged in on its own", state["logins"] >= 2)
 
     check("stop reports success", "Daemon stopped" in run_cli("stop").stdout)
-    time.sleep(2)
+    check("daemon is gone", not background.is_daemon_running())
     check("pid file cleaned up", not background.PID_FILE.exists())
-    check("daemon is gone", not background._daemon_processes())
     check("stop on an idle machine is graceful", "No running" in run_cli("stop").stdout)
 
 

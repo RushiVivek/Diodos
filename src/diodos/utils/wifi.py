@@ -1,4 +1,6 @@
+import json
 import re
+import shutil
 import subprocess
 import sys
 import logging
@@ -89,7 +91,9 @@ def _get_windows_ssid() -> str | None:
     return None
 
 
-def _get_linux_ssid() -> str | None:
+def _get_networkmanager_ssid() -> str | None:
+    # --rescan no reads the cached scan instead of triggering a fresh one,
+    # which can take seconds on every daemon poll.
     output = _run_command([
         "nmcli",
         "-t",
@@ -97,6 +101,9 @@ def _get_linux_ssid() -> str | None:
         "active,ssid",
         "dev",
         "wifi",
+        "list",
+        "--rescan",
+        "no",
     ])
 
     if not output:
@@ -105,7 +112,61 @@ def _get_linux_ssid() -> str | None:
     for line in output.splitlines():
         if line.startswith("yes:"):
             logger.debug("Found active SSID line: %s", line)
-            return line[4:]
+            # Terse mode escapes ':' and '\\' inside values.
+            return line[4:].replace("\\:", ":").replace("\\\\", "\\") or None
+
+    return None
+
+
+def _get_iwgetid_ssid() -> str | None:
+    # wireless-tools, for Linux setups without NetworkManager.
+    output = _run_command(["iwgetid", "-r"])
+
+    return (output or "").strip() or None
+
+
+def _get_termux_ssid() -> str | None:
+    """
+    Android, through the Termux:API app and the termux-api package. Android
+    only reveals the SSID to apps holding the location permission, so without
+    it the name reads as "<unknown ssid>".
+    """
+    output = _run_command(["termux-wifi-connectioninfo"])
+
+    if not output:
+        return None
+
+    try:
+        ssid = json.loads(output).get("ssid")
+    except (json.JSONDecodeError, AttributeError):
+        logger.warning("Unexpected termux-wifi-connectioninfo output: %s", output)
+        return None
+
+    if not ssid or ssid == "<unknown ssid>":
+        logger.warning(
+            "Android hid the Wi-Fi name. Grant the Termux:API app the location "
+            "permission and keep location turned on."
+        )
+        return None
+
+    return ssid
+
+
+# Tried in order. Only tools present on PATH are run, so a missing one never
+# costs a failed process launch on each poll.
+_LINUX_READERS = [
+    ("nmcli", _get_networkmanager_ssid),
+    ("iwgetid", _get_iwgetid_ssid),
+    ("termux-wifi-connectioninfo", _get_termux_ssid),
+]
+
+
+def _get_linux_ssid() -> str | None:
+    for tool, reader in _LINUX_READERS:
+        if shutil.which(tool):
+            ssid = reader()
+            if ssid:
+                return ssid
 
     return None
 
@@ -158,22 +219,29 @@ def _get_macos_ssid() -> str | None:
     return None
 
 
+def current_ssid() -> str | None:
+    """
+    The SSID of the Wi-Fi network currently joined, or None if it cannot be
+    determined (not on Wi-Fi, or no supported tool on this system).
+    """
+    if sys.platform == "win32":
+        ssid = _get_windows_ssid()
+    elif sys.platform == "darwin":
+        ssid = _get_macos_ssid()
+    else:
+        # Linux, and Android, whether Python reports it as "linux" or "android".
+        ssid = _get_linux_ssid()
+
+    logger.debug("Current SSID: %s", ssid)
+    return ssid
+
+
 def is_correct_network(expected_ssid: str) -> bool:
     """
     Return True if the currently connected Wi-Fi SSID matches the expected SSID, False otherwise.
     """
-
     if not expected_ssid:
         logger.debug("No expected SSID provided.")
         return False
 
-    if sys.platform == "win32":
-        current_ssid = _get_windows_ssid()
-
-    elif sys.platform == "darwin":
-        current_ssid = _get_macos_ssid()
-
-    else:
-        current_ssid = _get_linux_ssid()
-        
-    return current_ssid == expected_ssid
+    return current_ssid() == expected_ssid

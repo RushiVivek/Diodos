@@ -1,7 +1,7 @@
 import typer
 import logging
 
-from diodos.utils.background import launch_daemon
+from diodos.utils.background import AlreadyRunning, DaemonError, launch_daemon
 from diodos.utils.config import load_config
 
 logger = logging.getLogger(__name__)
@@ -25,9 +25,15 @@ def main() -> None:
     typer.echo("Launching the diodos daemon in the background...")
     logger.info("Launching the diodos daemon in the background.")
 
-    if not launch_daemon():
+    try:
+        launch_daemon()
+    except AlreadyRunning:
         typer.echo("A diodos daemon is already running.")
-        raise typer.Exit(code=0)
+        return
+    except DaemonError as e:
+        typer.echo(f"Error: {e}")
+        logger.error("%s", e)
+        raise typer.Exit(code=1)
 
     typer.echo("Daemon launched successfully. It will continue to monitor network connections for captive portals.")
     logger.info("Daemon launched successfully. It will continue to monitor network connections for captive portals.")

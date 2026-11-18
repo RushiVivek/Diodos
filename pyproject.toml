@@ -19,7 +19,6 @@ classifiers = [
 ]
 dependencies = [
     "filelock>=3.32.4",
-    "psutil>=7.2.2",
     "requests>=2.34.2",
     "tomlkit>=0.15.1",
     "typer>=0.27.1",
