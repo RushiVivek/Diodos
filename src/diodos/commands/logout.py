@@ -1,8 +1,9 @@
 import typer
 import logging
 
-from diodos.utils.config import load_config
-from diodos.utils.network import attempt_logout
+from diodos.utils.config import ConfigError, load_config
+from diodos.utils.network import attempt_logout, select_network
+from diodos.utils.wifi import current_ssid
 
 logger = logging.getLogger(__name__)
 
@@ -14,15 +15,26 @@ def main() -> None:
     logger.debug("Starting one-time logout.")
     try:
         config = load_config()
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ConfigError) as e:
         typer.echo(f"Error: {e}")
-        logger.error("Configuration file not found: %s", e)
+        logger.error("Cannot load config: %s", e)
         raise typer.Exit(code=1)
 
-    logout_success = attempt_logout(config)
-    if logout_success:
+    ssid = current_ssid()
+    network = select_network(config["networks"], ssid)
+
+    if network is None:
+        typer.echo(f"No configured network covers the current Wi-Fi network ({ssid or 'unknown'}).")
+        raise typer.Exit(code=1)
+
+    if network["logout"] is None:
+        typer.echo(f"{network['name']} has no [networks.logout] url configured.")
+        raise typer.Exit(code=1)
+
+    if attempt_logout(network):
         typer.echo("Logout successful!")
-        logger.info("Logout successful!")
+        logger.info("Logged out of %s.", network["name"])
     else:
         typer.echo("Logout failed. Please check your configuration or network status.")
-        logger.error("Logout failed.")
+        logger.error("Logout from %s failed.", network["name"])
+        raise typer.Exit(code=1)

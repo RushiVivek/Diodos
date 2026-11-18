@@ -89,40 +89,23 @@ def _save_cookies(session: requests.Session) -> None:
     except Timeout:
         logger.error("Timeout occurred while trying to acquire lock for saving cookies.")
 
+# One session per process. The cookie jar on disk is reloaded before and saved
+# after every request, so `diodos login`, `diodos logout` and the daemon all
+# see the same portal session.
 session = requests.Session()
-_load_cookies(session)
 
 
-def get(*args, **kwargs):
+def _request(method: str, *args, **kwargs) -> requests.Response:
     _load_cookies(session)
-    response = session.get(*args, **kwargs)
-    _save_cookies(session)
-    return response
+    try:
+        return session.request(method, *args, **kwargs)
+    finally:
+        _save_cookies(session)
 
 
-def post(*args, **kwargs):
-    _load_cookies(session)
-    response = session.post(*args, **kwargs)
-    _save_cookies(session)
-    return response
+def get(*args, **kwargs) -> requests.Response:
+    return _request("GET", *args, **kwargs)
 
 
-def put(*args, **kwargs):
-    _load_cookies(session)
-    response = session.put(*args, **kwargs)
-    _save_cookies(session)
-    return response
-
-
-def delete(*args, **kwargs):
-    _load_cookies(session)
-    response = session.delete(*args, **kwargs)
-    _save_cookies(session)
-    return response
-
-
-def patch(*args, **kwargs):
-    _load_cookies(session)
-    response = session.patch(*args, **kwargs)
-    _save_cookies(session)
-    return response
+def post(*args, **kwargs) -> requests.Response:
+    return _request("POST", *args, **kwargs)

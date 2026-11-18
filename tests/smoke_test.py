@@ -42,10 +42,16 @@ class PortalHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/generate_204"):
+            # What the real probe does: an empty 204 when online, and the
+            # portal intercepting it when not.
             if state["logged_in"]:
-                self._send(200, "Success")
+                self.send_response(204)
+                self.end_headers()
             else:
                 self._send(200, "<html>Sign in to continue</html>")
+        elif self.path.startswith("/status"):
+            # For the legacy `msg` style check.
+            self._send(200, "Success" if state["logged_in"] else "<html>Sign in</html>")
         elif self.path.startswith("/logout"):
             state["logged_in"] = False
             state["logouts"] += 1
@@ -62,7 +68,8 @@ class PortalHandler(BaseHTTPRequestHandler):
             state["logins"] += 1
             self._send(200, "welcome", cookie="portal_session=xyz; Path=/")
         else:
-            self._send(403, "bad credentials")
+            # Like many real portals: a 200 page that says no.
+            self._send(200, "bad credentials")
 
 
 def check(label, condition):
@@ -82,10 +89,42 @@ def run_cli(*args):
     return result
 
 
-def write_config(path, port, bom=False, ssid=None):
-    network = f'[network]\nSSID = "{ssid}"\n\n' if ssid else ""
-    body = network + f"""[network_check]
+def write_config(path, port, bom=False, ssids=(), password=PASSWORD):
+    ssid_list = ", ".join(f'"{ssid}"' for ssid in ssids)
+    body = f"""interval = 2
+
+[check]
 url = "http://127.0.0.1:{port}/generate_204"
+
+[[networks]]
+name = "Elsewhere"
+ssids = ["diodos-some-other-network"]
+
+[networks.login]
+url = "http://127.0.0.1:1/never-used"
+
+[[networks]]
+name = "Test portal"
+ssids = [{ssid_list}]
+
+[networks.login]
+url = "http://127.0.0.1:{port}/login"
+
+[networks.login.form]
+username = "{USERNAME}"
+password = "{password}"
+
+[networks.logout]
+url = "http://127.0.0.1:{port}/logout"
+"""
+    # Windows editors and PowerShell readily save TOML with a BOM.
+    path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + body.encode("utf-8"))
+
+
+def write_legacy_config(path, port):
+    """The pre-0.5 single-network layout, which must keep working."""
+    path.write_text(f"""[network_check]
+url = "http://127.0.0.1:{port}/status"
 msg = "Success"
 interval = 2
 
@@ -98,9 +137,7 @@ password = "{PASSWORD}"
 
 [logout]
 url = "http://127.0.0.1:{port}/logout"
-"""
-    # Windows editors and PowerShell readily save TOML with a BOM.
-    path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + body.encode("utf-8"))
+""", encoding="utf-8")
 
 
 def make_noop_editor(directory):
@@ -159,11 +196,36 @@ def run_checks(tmp, port):
 
     open_config_file(config_path)
     check("default config created", config_path.exists())
-    check("default config parses", "network_check" in config_module.load_config())
+    check("default config parses", len(config_module.load_config()["networks"]) == 2)
+    check("default config is private", sys.platform == "win32" or config_path.stat().st_mode & 0o077 == 0)
 
     # Real config, deliberately written with a BOM.
     write_config(config_path, port, bom=True)
-    check("BOM-prefixed config parses", "login" in config_module.load_config())
+    check("BOM-prefixed config parses", len(config_module.load_config()["networks"]) == 2)
+
+    config_path.write_text("interval = 0\n[[networks]]\nname = 'x'\n", encoding="utf-8")
+    try:
+        config_module.load_config()
+        check("invalid config rejected", False)
+    except config_module.ConfigError as exc:
+        check(f"invalid config rejected ({exc})", "interval" in str(exc))
+
+    # Network selection by SSID. Done in-process with explicit SSIDs, since
+    # CI machines have no Wi-Fi to read.
+    from diodos.utils.network import select_network
+
+    write_config(config_path, port, ssids=["Hostel", "Library"])
+    networks = config_module.load_config()["networks"]
+    pick = lambda ssid: (select_network(networks, ssid) or {}).get("name")
+    check("first SSID of a network selects it", pick("Hostel") == "Test portal")
+    check("second SSID of a network selects it", pick("Library") == "Test portal")
+    check("other network's SSID selects that one", pick("diodos-some-other-network") == "Elsewhere")
+    check("unknown SSID selects nothing", pick("Cafe") is None)
+    check("unreadable SSID with several networks selects nothing", pick(None) is None)
+    check("unreadable SSID never uses an SSID-restricted network", select_network(networks[1:], None) is None)
+    wildcard = [networks[0], {**networks[1], "ssids": []}]
+    check("network without ssids matches any SSID", select_network(wildcard, "Cafe") is wildcard[1])
+    check("network without ssids used when SSID is unreadable", select_network(wildcard, None) is wildcard[1])
 
     # Cookie jar: locking, atomic replace, no leftovers.
     import requests
@@ -197,21 +259,26 @@ def run_checks(tmp, port):
     check(f"concurrent cookie access is safe {errors}", not errors)
     check("no temp files left behind", not list(config_dir.glob(".cookies.*.tmp")))
 
-    # A configured SSID we are not joined to must suppress the login.
-    write_config(config_path, port, ssid="diodos-no-such-network")
-    check(
-        "login skipped on the wrong network",
-        "No captive portal" in run_cli("login").stdout,
-    )
-    check("portal saw no login attempt", state["logins"] == 0)
+    # A portal that answers 200 to a wrong password must not count as a login.
+    write_config(config_path, port, password="wrong")
+    result = run_cli("login")
+    check("rejected login reported as failure", "failed" in result.stdout and result.returncode == 1)
+    check("portal saw no successful login", state["logins"] == 0)
 
-    # One-shot login and logout against the portal.
+    # One-shot login and logout against the portal. The test network has no
+    # SSIDs, so it is used whatever Wi-Fi this machine is on.
     write_config(config_path, port, bom=True)
     check("login reports success", "Login successful" in run_cli("login").stdout)
     check("portal saw the login", state["logins"] == 1)
     check("second login is a no-op", "No captive portal" in run_cli("login").stdout)
     check("logout reports success", "Logout successful" in run_cli("logout").stdout)
     check("portal saw the logout", state["logouts"] == 1)
+
+    write_legacy_config(config_path, port)
+    check("legacy config logs in", "Login successful" in run_cli("login").stdout)
+    check("legacy config logs out", "Logout successful" in run_cli("logout").stdout)
+    check("portal saw both", state["logins"] == 2 and state["logouts"] == 2)
+    write_config(config_path, port)
 
     # The daemon runs detached, so it must fail on a missing config rather
     # than take the branch that creates one and opens a text editor.
@@ -248,10 +315,11 @@ def run_checks(tmp, port):
     check("duplicate start refused", "already running" in run_cli("start").stdout)
     check("duplicate daemon refused", run_cli("daemon").returncode == 1)
 
+    # The logout above left the portal signed out.
     deadline = time.monotonic() + 30
-    while time.monotonic() < deadline and state["logins"] < 2:
+    while time.monotonic() < deadline and state["logins"] < 3:
         time.sleep(0.5)
-    check("daemon logged in on its own", state["logins"] >= 2)
+    check("daemon logged in on its own", state["logins"] >= 3)
 
     check("stop reports success", "Daemon stopped" in run_cli("stop").stdout)
     check("daemon is gone", not background.is_daemon_running())

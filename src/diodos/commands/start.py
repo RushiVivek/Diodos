@@ -2,7 +2,7 @@ import typer
 import logging
 
 from diodos.utils.background import AlreadyRunning, DaemonError, launch_daemon
-from diodos.utils.config import load_config
+from diodos.utils.config import ConfigError, load_config
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +17,9 @@ def main() -> None:
     # so a first-run setup prompt and any error actually reach the user.
     try:
         load_config()
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ConfigError) as e:
         typer.echo(f"Error: {e}")
-        logger.error("Configuration file not found: %s", e)
+        logger.error("Cannot load config: %s", e)
         raise typer.Exit(code=1)
 
     typer.echo("Launching the diodos daemon in the background...")
@@ -36,4 +36,4 @@ def main() -> None:
         raise typer.Exit(code=1)
 
     typer.echo("Daemon launched successfully. It will continue to monitor network connections for captive portals.")
-    logger.info("Daemon launched successfully. It will continue to monitor network connections for captive portals.")
+    logger.info("Daemon launched successfully.")

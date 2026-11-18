@@ -1,17 +1,74 @@
-[network]
-SSID = "SSID"
+# Diodos configuration.
+#
+# Lines starting with # are comments. Fill in the values below, save, then run
+# `diodos login` to test. A running daemon picks up changes on its next check,
+# so there is no need to restart it.
+#
+# Only [[networks]] with its [networks.login] url is required. Everything
+# marked OPTIONAL can be deleted to use the default shown.
 
-[network_check]
-url = "test_url"
-msg = "test_msg"
+# OPTIONAL. Seconds between connectivity checks while the daemon runs.
+# Default: 60.
 interval = 60
 
-[login]
-url = "url"
+# OPTIONAL section. How diodos decides whether you are already online.
+[check]
+# A plain http:// (not https://) address. Captive portals redirect plain HTTP
+# requests to their login page, which is how they are detected, but often
+# silently drop https:// ones, which then just time out. This default answers
+# an empty "204 No Content" in a fraction of a second when you are online,
+# and was the fastest, most consistent probe in testing on a campus portal.
+# Default: "http://connectivitycheck.gstatic.com/generate_204".
+url = "http://connectivitycheck.gstatic.com/generate_204"
 
-[login.credentials]
-username = "..."
-password = "..."
+# OPTIONAL. With `expect` set you count as online when the page at `url`
+# contains this text, instead of when it answers 204. Useful when your portal
+# has a status page that says so, for example:
+#   url = "https://portal.example.edu:6082/"
+#   expect = "Already Connected"
+# expect = "Success"
 
-[logout]
-url = "url"
+
+# REQUIRED: at least one [[networks]] block, one per captive portal. Copy a
+# whole block, from [[networks]] down to the next one, to add another.
+[[networks]]
+# OPTIONAL. Any label, shown in messages and logs.
+name = "College"
+
+# OPTIONAL. Wi-Fi names (SSIDs) that log in through this portal, e.g. one
+# campus portal shared by the hostel and library access points. Leave it out,
+# or use [], to try this portal on any network, or if diodos cannot read the
+# Wi-Fi name on your system.
+ssids = ["College-Hostel", "College-Library"]
+
+# REQUIRED section.
+[networks.login]
+# REQUIRED. Where the portal's login form submits to. To find it, open the
+# browser's developer tools (Network tab), log in by hand and look at the
+# request sent.
+url = "http://portal.example.edu:8090/login"
+
+# OPTIONAL section, but nearly every portal needs it. Every field the login
+# form sends. Copy the names from the same request: portals do not always
+# call them "username" and "password", and some need extra fixed fields too.
+[networks.login.form]
+username = "your-username"
+password = "your-password"
+
+# OPTIONAL section, only used by `diodos logout`. Sends a GET request to
+# `url`, or a POST with the fields of a [networks.logout.form] table if you
+# add one (same layout as [networks.login.form]).
+[networks.logout]
+url = "http://portal.example.edu:8090/logout"
+
+
+[[networks]]
+name = "Home"
+ssids = ["Home-WiFi"]
+
+[networks.login]
+url = "http://192.168.1.1/login"
+
+[networks.login.form]
+username = "your-username"
+password = "your-password"

@@ -6,8 +6,8 @@ import typer
 import logging
 
 from diodos.utils.background import AlreadyRunning, daemon_lock
-from diodos.utils.config import load_config
-from diodos.utils.network import network_check, attempt_login
+from diodos.utils.config import ConfigError, load_config
+from diodos.utils.network import LoginResult, ensure_logged_in
 
 logger = logging.getLogger(__name__)
 
@@ -19,16 +19,13 @@ def main() -> None:
     logger.debug("Starting the daemon process.")
     try:
         config = load_config(create_if_missing=False)
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ConfigError) as e:
         typer.echo(f"Error: {e}")
-        logger.error("Configuration file not found: %s", e)
+        logger.error("Cannot start the daemon: %s", e)
         raise typer.Exit(code=1)
 
-    interval = config.get("network_check", {}).get("interval", 60)
-    logger.debug("Network check interval set to %s seconds.", interval)
-
     # `diodos stop` sends SIGTERM. Turning it into SystemExit runs the cleanup
-    # in daemon_lock instead of dying on the spot with the PID file left behind.
+    # below instead of dying on the spot with the PID file left behind.
     if sys.platform != "win32":
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
@@ -36,7 +33,7 @@ def main() -> None:
         with daemon_lock():
             typer.echo("Starting the diodos daemon...")
             logger.info("Starting the diodos daemon...")
-            _run(config, interval)
+            _run(config)
     except AlreadyRunning as e:
         typer.echo(str(e))
         logger.info("%s", e)
@@ -46,24 +43,22 @@ def main() -> None:
         logger.info("Daemon stopped by user.")
 
 
-def _run(config: dict, interval: float) -> None:
-    next_run = time.monotonic()
+def _run(config: dict) -> None:
     while True:
-        now = time.monotonic()
-        if now >= next_run:
-            logger.debug("Checking network status.")
-            check = network_check(config)
-            if check:
-                typer.echo("Captive portal detected. Attempting to log in...")
-                logger.info("Captive portal detected. Attempting to log in...")
-                login_success = attempt_login(config)
-                if login_success:
-                    typer.echo("Login successful!")
-                    logger.info("Login successful!")
-                else:
-                    typer.echo("Login failed. Please check your credentials or configuration.")
-                    logger.error("Login failed.")
+        # Reloaded every round, so edits apply without a restart. A broken
+        # edit keeps the last good config running rather than killing the
+        # daemon.
+        try:
+            config = load_config(create_if_missing=False)
+        except (FileNotFoundError, ConfigError) as e:
+            logger.error("Keeping the previous config: %s", e)
 
-            next_run = now + interval  # Default to 60 seconds if not specified
+        logger.debug("Checking network status.")
+        result, network, ssid = ensure_logged_in(config)
 
-        time.sleep(5)  # Sleep for a short duration to avoid busy waiting
+        if result is LoginResult.LOGGED_IN:
+            typer.echo(f"Logged in to {network['name']}.")
+        elif result is LoginResult.FAILED:
+            typer.echo(f"Login to {network['name']} failed. Check the credentials and login url.")
+
+        time.sleep(config["interval"])

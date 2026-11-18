@@ -1,91 +1,154 @@
-import requests
 import logging
+import time
+from enum import Enum
 
-from .wifi import is_correct_network
+import requests
+
 from . import http_client
+from .wifi import current_ssid
 
 logger = logging.getLogger(__name__)
 
+# Seconds to wait for the portal to start letting traffic through after it
+# accepted the login form.
+LOGIN_SETTLE_SECONDS = 3
 
-def network_check(config: dict) -> bool:
+
+def is_online(check: dict) -> bool:
     """
-    Check if the network is behind a captive portal by making a request to a known URL.
-    Returns True if a captive portal is detected, False otherwise.
+    Return True if the internet is reachable without a captive portal.
+
+    By default this asks a "generate_204" endpoint, the same probe Android and
+    ChromeOS use: it answers an empty 204 when the internet is reachable, while
+    a captive portal intercepts the plain-HTTP request and answers with its own
+    page or a redirect instead. With `expect` set, the page body must contain
+    that text instead.
     """
-    network_check_config = config.get("network_check", {})
-    SSID = config.get("network", {}).get("SSID")
-
-    if SSID and not is_correct_network(SSID):
-        logger.debug("Not connected to the expected network: %s. Skipping captive portal check.", SSID)
-        return False
-    
-    test_url = network_check_config.get("url")
-    test_msg = network_check_config.get("msg", "Success")
-
-    if not test_url:
-        logger.debug("No test URL provided for network check. Assuming no captive portal.")
-        return True
+    expect = check.get("expect")
 
     try:
-        response = http_client.get(test_url, timeout=5)
-        logger.debug("Network check response status code: %s", response.status_code)
-        # Check if the response contains the expected message
-        if test_msg in response.text:
-            logger.debug("No captive portal detected.")
-            return False
-        else:
-            logger.debug("Captive portal detected.")
+        # The check stays out of the shared cookie jar: it is not the portal.
+        # Redirects are left unfollowed in 204 mode, since following one
+        # would land on the portal's 200 page and hide the interception.
+        response = requests.get(check["url"], timeout=5, allow_redirects=bool(expect))
+    except requests.RequestException as e:
+        logger.info("Connectivity check failed: %s", e)
+        return False
+
+    logger.debug("Connectivity check answered %s.", response.status_code)
+
+    if expect:
+        return expect in response.text
+
+    return response.status_code == 204
+
+
+def select_network(networks: list[dict], ssid: str | None) -> dict | None:
+    """
+    Pick the configured network for the Wi-Fi network we are on.
+
+    A network lists the SSIDs it serves, and one with no SSIDs serves any
+    network. If the current SSID cannot be read, only such a wildcard network
+    is used: a network restricted to some SSIDs never gets its credentials
+    sent on a network that could be any other.
+    """
+    if ssid is not None:
+        for network in networks:
+            if ssid in network["ssids"]:
+                return network
+
+    for network in networks:
+        if not network["ssids"]:
+            return network
+
+    if ssid is None:
+        logger.warning(
+            "Could not read the Wi-Fi name, and every network is limited to "
+            "specific SSIDs. Not logging in. Use ssids = [] to allow any network."
+        )
+
+    return None
+
+
+class LoginResult(Enum):
+    ONLINE = "already online"
+    UNKNOWN_NETWORK = "not on a configured network"
+    LOGGED_IN = "logged in"
+    FAILED = "login failed"
+
+
+def ensure_logged_in(config: dict) -> tuple[LoginResult, dict | None, str | None]:
+    """
+    Log in through the right portal if the internet is not reachable.
+
+    Returns the result, the network used (if any) and the current SSID.
+    """
+    if is_online(config["check"]):
+        logger.debug("Online. Nothing to do.")
+        return LoginResult.ONLINE, None, None
+
+    ssid = current_ssid()
+    network = select_network(config["networks"], ssid)
+
+    if network is None:
+        logger.info("Offline, but no configured network matches SSID %r.", ssid)
+        return LoginResult.UNKNOWN_NETWORK, None, ssid
+
+    logger.info("Captive portal suspected on %r. Logging in to %s.", ssid, network["name"])
+
+    if attempt_login(network, config["check"]):
+        logger.info("Logged in to %s.", network["name"])
+        return LoginResult.LOGGED_IN, network, ssid
+
+    logger.error("Login to %s failed.", network["name"])
+    return LoginResult.FAILED, network, ssid
+
+
+def attempt_login(network: dict, check: dict) -> bool:
+    """
+    Submit the login form, then confirm the internet is actually reachable.
+
+    Many portals answer 200 even when they reject the credentials, so the
+    status code alone does not prove the login worked.
+    """
+    login = network["login"]
+
+    try:
+        response = http_client.post(login["url"], data=login["form"], timeout=10)
+    except requests.RequestException as e:
+        logger.error("Could not reach the login page %s: %s", login["url"], e)
+        return False
+
+    logger.debug("Login response status code: %s", response.status_code)
+
+    if not response.ok:
+        return False
+
+    deadline = time.monotonic() + LOGIN_SETTLE_SECONDS
+    while True:
+        if is_online(check):
             return True
-    except requests.RequestException as e:
-        logger.warning("Network check failed: %s", e)
-        return True
+        if time.monotonic() >= deadline:
+            logger.warning("The portal accepted the form, but the internet is still unreachable.")
+            return False
+        time.sleep(1)
 
-def attempt_login(config: dict) -> bool:
-    """
-    Attempt to log in to the captive portal using the provided credentials or configuration.
-    Returns True if login is successful, False otherwise.
-    """
-    login_config = config.get("login", {})
-    login_url = login_config.get("url")
-    credentials = login_config.get("credentials", {})
 
-    if not login_url:
-        logger.debug("No login URL provided.")
-        return False
+def attempt_logout(network: dict) -> bool:
+    """
+    Log out of the portal: a POST if the logout has form fields, else a GET.
+    Returns True if the portal accepted the request.
+    """
+    logout = network["logout"]
 
     try:
-        response = http_client.post(
-            login_url,
-            data=credentials,
-            timeout=5,
-            allow_redirects=True,
-        )
-        logger.debug("Login response status code: %s", response.status_code)
-        return response.status_code == 200
-    except requests.RequestException as e:
-        logger.error("Error occurred while attempting login: %s", e)
-        return False
-
-def attempt_logout(config: dict) -> bool:
-    """
-    Attempt to log out from the captive portal using the provided configuration.
-    Returns True if logout is successful, False otherwise.
-    """
-    logout_config = config.get("logout", {})
-    logout_url = logout_config.get("url")
-
-    if not logout_url:
-        logger.debug("No logout URL provided.")
-        return False
-
-    try:
-        response = http_client.get(
-            logout_url,
-            timeout=5,
-            allow_redirects=True,
-        )
-        logger.debug("Logout response status code: %s", response.status_code)
-        return response.status_code == 200
+        if logout["form"]:
+            response = http_client.post(logout["url"], data=logout["form"], timeout=10)
+        else:
+            response = http_client.get(logout["url"], timeout=10)
     except requests.RequestException as e:
         logger.error("Error occurred while attempting logout: %s", e)
         return False
+
+    logger.debug("Logout response status code: %s", response.status_code)
+    return response.ok

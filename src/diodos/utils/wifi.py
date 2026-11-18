@@ -234,14 +234,3 @@ def current_ssid() -> str | None:
 
     logger.debug("Current SSID: %s", ssid)
     return ssid
-
-
-def is_correct_network(expected_ssid: str) -> bool:
-    """
-    Return True if the currently connected Wi-Fi SSID matches the expected SSID, False otherwise.
-    """
-    if not expected_ssid:
-        logger.debug("No expected SSID provided.")
-        return False
-
-    return current_ssid() == expected_ssid
