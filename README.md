@@ -7,10 +7,16 @@
 ## Features
 
 - Checks connectivity on a configurable interval.
-- Detects likely captive-portal redirects.
-- Submits configured credentials automatically.
+- Detects captive portals the way Android and ChromeOS do, with a `generate_204` probe.
+- Picks the right portal from the Wi-Fi name, so one config covers college, home and so on, with several SSIDs per portal.
+- Submits the login form, then confirms the internet actually works.
 - Works with `python -m diodos` and the installed `diodos` command.
-- Runs on Windows, macOS and Linux.
+- Runs on Windows, macOS, Linux and Android (Termux).
+
+> **Tested on:** diodos is only fully tested on an Arch Linux machine. Windows,
+> macOS and Android support is covered by CI smoke tests but not used day to
+> day, so please [open an issue](https://github.com/RushiVivek/Diodos/issues)
+> for any bug you find on another OS.
 
 ## Installation
 
@@ -124,30 +130,54 @@ Default config path:
 - macOS: `~/Library/Application Support/diodos/config.toml`
 - Windows: `%APPDATA%/diodos/config.toml`
 
+- Android (Termux): `~/.config/diodos/config.toml`
+
 Set `DIODOS_CONFIG_DIR` to keep the config, cookie jar and PID file somewhere
 else. The file may be saved as UTF-8 with or without a byte order mark.
 
-Example:
+`diodos config` creates a commented sample that explains every field. In short:
 
 ```toml
-[network]
-SSID = "Example SSID"
+interval = 60  # optional: seconds between checks
 
-[network_check]
-url = "https://example.com"
-msg = "Success"
-interval = 60
+[check]  # optional: this url is the default
+url = "http://connectivitycheck.gstatic.com/generate_204"
 
-[login]
-url = "https://portal.example.com/login"
+# Required: one [[networks]] block per portal.
+[[networks]]
+name = "College"  # optional label
+ssids = ["College-Hostel", "College-Library"]  # optional; [] or omitted = any network
 
-[login.credentials]
+[networks.login]  # required
+url = "http://portal.example.edu:8090/login"
+
+[networks.login.form]  # optional, but most portals need it: every field the portal's login form sends
 username = "your-username"
 password = "your-password"
 
-[logout]
-url = "https://portal.example.com/logout"
+[networks.logout]  # optional; add a [networks.logout.form] to POST instead of GET
+url = "http://portal.example.edu:8090/logout"
+
+[[networks]]
+name = "Home"
+ssids = ["Home-WiFi"]
+
+[networks.login]
+url = "http://192.168.1.1/login"
+
+[networks.login.form]
+username = "your-username"
+password = "your-password"
 ```
+
+When the internet is unreachable, diodos reads the current Wi-Fi name and logs
+in through the network that lists it. If the name cannot be read, it only uses
+a network with `ssids = []`. A network that lists SSIDs never has its
+credentials sent anywhere else.
+
+A running daemon re-reads the config on every check, so edits apply without a
+restart. Config files from before 0.5 (`[network]`, `[network_check]`,
+`[login.credentials]`) still work unchanged.
 
 ## Platform notes
 
@@ -165,9 +195,47 @@ Choose an editor there, and tick the box to remember it. Setting `EDITOR` (or
 
 ### macOS and Linux
 
-The SSID is read with `networksetup` on macOS and `nmcli` on Linux. If neither
-is available the SSID check is skipped and connectivity alone decides whether
-to log in.
+The SSID is read with `networksetup` on macOS, and with `nmcli` or `iwgetid`
+on Linux.
+
+> **macOS:** on recent macOS (15 Sequoia and later), `networksetup -getairportnetwork` reports
+> "You are not associated with an AirPort network" even while connected,
+> because Apple hides the Wi-Fi name from command-line tools that lack the
+> location permission. diodos then cannot tell which network you are on, so it
+> only logs in through a network with `ssids = []`. On a Mac, use that setup.
+
+### Android (Termux)
+
+Install [Termux](https://termux.dev) from F-Droid or GitHub (the Play Store
+build is outdated), then:
+
+```bash
+pkg install python
+pip install diodos
+```
+
+To pick a network by Wi-Fi name, diodos needs the
+[Termux:API](https://wiki.termux.com/wiki/Termux:API) app plus
+`pkg install termux-api`, and the Termux:API app needs the location permission
+with location turned on. Android hides the Wi-Fi name from apps without it.
+Without Termux:API, use `ssids = []`.
+
+Android suspends background apps, so keep the daemon alive with:
+
+```bash
+termux-wake-lock
+diodos start
+```
+
+To start it at boot, install Termux:Boot and put those two lines in an
+executable script in `~/.termux/boot/`. As an alternative to the daemon, an
+automation app that can run Termux commands (for example through
+Termux:Tasker) can run `diodos login` whenever Wi-Fi connects.
+
+If Android shows "connected, no internet" and switches to mobile data, the
+check succeeds over mobile data and diodos sees nothing to do. Turn off
+mobile data, or Android's "switch to mobile data" option, while on the portal
+network.
 
 ## Development
 
