@@ -69,8 +69,27 @@ def _load_hosts() -> dict:
         return {}
 
 
+def _private(addresses) -> list[str]:
+    """
+    Only private addresses are remembered or used. The fallback exists for
+    campus-internal names, which public DNS cannot resolve and which live at
+    private addresses, so a public address is never needed. This also means
+    a spoofed DNS answer can never pin the portal to an outside server.
+    """
+    kept = []
+    for address in addresses:
+        try:
+            if ipaddress.ip_address(address.split("%")[0]).is_private:
+                kept.append(address)
+        except ValueError:
+            pass
+    return sorted(set(kept))
+
+
 def _remember(host: str, result: list) -> None:
-    addresses = sorted({entry[4][0] for entry in result})
+    addresses = _private(entry[4][0] for entry in result)
+    if not addresses:
+        return
     hosts = _load_hosts()
 
     if hosts.get(host) == addresses:
@@ -92,7 +111,7 @@ def _getaddrinfo(host, port, *args, **kwargs):
     try:
         result = _system_getaddrinfo(host, port, *args, **kwargs)
     except socket.gaierror:
-        addresses = _load_hosts().get(host)
+        addresses = _private(_load_hosts().get(host) or [])
         if not addresses:
             logger.warning(
                 "%s does not resolve, probably because DNS goes over mobile "
