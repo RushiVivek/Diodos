@@ -144,8 +144,9 @@ def _get_termux_ssid() -> str | None:
 
     if not ssid or ssid == "<unknown ssid>":
         logger.warning(
-            "Android hid the Wi-Fi name. Grant the Termux:API app the location "
-            "permission and keep location turned on."
+            "Android hid the Wi-Fi name. Give the Termux:API app location "
+            "access 'Allow all the time' with 'Use precise location' on, and "
+            "keep location turned on."
         )
         return None
 

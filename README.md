@@ -210,15 +210,29 @@ Install [Termux](https://termux.dev) from F-Droid or GitHub (the Play Store
 build is outdated), then:
 
 ```bash
-pkg install python
-pip install diodos
+pkg install python uv
+uv tool install diodos
 ```
+
+If `diodos` is not found afterwards, run `uv tool update-shell` and restart
+Termux. On diodos 0.5.0, use
+`uv tool install diodos --with 'typer<0.29'` instead: newer Typer releases need
+pydantic, which cannot be built on Android.
 
 To pick a network by Wi-Fi name, diodos needs the
 [Termux:API](https://wiki.termux.com/wiki/Termux:API) app plus
-`pkg install termux-api`, and the Termux:API app needs the location permission
-with location turned on. Android hides the Wi-Fi name from apps without it.
-Without Termux:API, use `ssids = []`.
+`pkg install termux-api`. Android only reveals the Wi-Fi name to apps with
+precise location access, so otherwise `termux-wifi-connectioninfo` reports
+`"<unknown ssid>"`. In Android Settings > Apps > Termux:API > Permissions >
+Location:
+
+- choose **Allow all the time** (Termux:API answers from a background
+  service, so "Only while using the app" is often not enough),
+- turn on **Use precise location** (approximate location hides the name),
+- and keep the phone's location toggle on.
+
+Check with `termux-wifi-connectioninfo`. If it still shows `"<unknown ssid>"`,
+use `ssids = []`.
 
 Android suspends background apps, so keep the daemon alive with:
 
