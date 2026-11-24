@@ -246,10 +246,12 @@ executable script in `~/.termux/boot/`. As an alternative to the daemon, an
 automation app that can run Termux commands (for example through
 Termux:Tasker) can run `diodos login` whenever Wi-Fi connects.
 
-If Android shows "connected, no internet" and switches to mobile data, the
-check succeeds over mobile data and diodos sees nothing to do. Turn off
-mobile data, or Android's "switch to mobile data" option, while on the portal
-network.
+Until you log in, Android sends traffic over mobile data, so diodos sends its
+own requests through the Wi-Fi interface instead. Portal
+hostnames that only the campus DNS knows cannot be looked up over mobile data,
+so diodos remembers the portal's address whenever the name does resolve. Turn
+mobile data off for the very first login on a network, or whenever you see
+"does not resolve" in the logs. After that, mobile data can stay on.
 
 ## Development
 

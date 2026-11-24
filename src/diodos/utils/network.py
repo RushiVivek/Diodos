@@ -27,10 +27,9 @@ def is_online(check: dict) -> bool:
     expect = check.get("expect")
 
     try:
-        # The check stays out of the shared cookie jar: it is not the portal.
         # Redirects are left unfollowed in 204 mode, since following one
         # would land on the portal's 200 page and hide the interception.
-        response = requests.get(check["url"], timeout=5, allow_redirects=bool(expect))
+        response = http_client.probe(check["url"], timeout=5, allow_redirects=bool(expect))
     except requests.RequestException as e:
         logger.info("Connectivity check failed: %s", e)
         return False
