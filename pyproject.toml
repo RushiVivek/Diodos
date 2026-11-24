@@ -21,7 +21,9 @@ dependencies = [
     "filelock>=3.32.4",
     "requests>=2.34.2",
     "tomlkit>=0.15.1",
-    "typer>=0.27.1",
+    # typer 0.29 requires pydantic, whose Rust core has no Android wheels and
+    # fails to build under Termux. Keep diodos free of compiled dependencies.
+    "typer>=0.27.1,<0.29",
 ]
 
 [project.urls]
