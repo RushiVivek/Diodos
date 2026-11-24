@@ -259,6 +259,55 @@ def run_checks(tmp, port):
     check(f"concurrent cookie access is safe {errors}", not errors)
     check("no temp files left behind", not list(config_dir.glob(".cookies.*.tmp")))
 
+    # Android: requests pinned to the Wi-Fi interface, and a portal hostname
+    # that does not resolve (DNS over mobile data) reached through its
+    # remembered address. Simulated on Linux with the loopback interface.
+    import socket
+
+    from diodos.utils import android, network
+
+    if sys.platform.startswith("linux"):
+        pinned = http_client._InterfaceAdapter("lo")
+        with requests.Session() as s:
+            s.mount("http://", pinned)
+            check("request pinned to an interface goes through", s.get(f"http://127.0.0.1:{port}/status", timeout=5).ok)
+        with requests.Session() as s:
+            s.mount("http://", http_client._InterfaceAdapter("diodos-none0"))
+            try:
+                s.get(f"http://127.0.0.1:{port}/status", timeout=5)
+                check("request pinned to a missing interface fails", False)
+            except requests.ConnectionError:
+                check("request pinned to a missing interface fails", True)
+
+    host = "portal.diodos.invalid"
+    android.HOSTS_FILE.write_text(json.dumps({host: ["127.0.0.1"]}), encoding="utf-8")
+    saved = (android.IS_ANDROID, android.wifi_interface)
+    android.IS_ANDROID = True
+    android.wifi_interface = (lambda: "lo") if sys.platform.startswith("linux") else (lambda: None)
+    try:
+        state["logged_in"] = False
+        portal_config = {
+            "check": {"url": f"http://127.0.0.1:{port}/generate_204", "expect": None},
+            "networks": [{
+                "name": "Remembered",
+                "ssids": [],
+                "login": {"url": f"http://{host}:{port}/login",
+                          "form": {"username": USERNAME, "password": PASSWORD}},
+                "logout": None,
+            }],
+        }
+        result, _, _ = network.ensure_logged_in(portal_config)
+        check(f"login through a remembered portal address ({result.name})", result is network.LoginResult.LOGGED_IN)
+
+        http_client.get(f"http://localhost:{port}/status", timeout=5)
+        remembered = json.loads(android.HOSTS_FILE.read_text(encoding="utf-8"))
+        check("resolvable portal host is remembered", "localhost" in remembered)
+    finally:
+        android.IS_ANDROID, android.wifi_interface = saved
+        socket.getaddrinfo = android._system_getaddrinfo
+        # Leave the portal as the CLI checks below expect to find it.
+        state.update(logged_in=False, logins=0, logouts=0)
+
     # A portal that answers 200 to a wrong password must not count as a login.
     write_config(config_path, port, password="wrong")
     result = run_cli("login")

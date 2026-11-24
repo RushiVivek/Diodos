@@ -178,7 +178,7 @@ wheels = [
 
 [[package]]
 name = "diodos"
-version = "0.5.0"
+version = "0.5.1"
 source = { editable = "." }
 dependencies = [
     { name = "filelock" },
@@ -192,7 +192,7 @@ requires-dist = [
     { name = "filelock", specifier = ">=3.32.4" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "tomlkit", specifier = ">=0.15.1" },
-    { name = "typer", specifier = ">=0.27.1" },
+    { name = "typer", specifier = ">=0.27.1,<0.29" },
 ]
 
 [[package]]
