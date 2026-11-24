@@ -1,6 +1,6 @@
 [project]
 name = "diodos"
-version = "0.5.0"
+version = "0.5.1"
 description = "Auto detect and login to the captive portal of given networks."
 readme = "README.md"
 license = "MIT"
