@@ -302,6 +302,14 @@ def run_checks(tmp, port):
         http_client.get(f"http://localhost:{port}/status", timeout=5)
         remembered = json.loads(android.HOSTS_FILE.read_text(encoding="utf-8"))
         check("resolvable portal host is remembered", "localhost" in remembered)
+
+        # A public address, as a spoofed DNS answer could plant, is never used.
+        android.HOSTS_FILE.write_text(json.dumps({host: ["93.184.215.14"]}), encoding="utf-8")
+        try:
+            http_client.get(f"http://{host}:{port}/status", timeout=5)
+            check("remembered public address is refused", False)
+        except requests.ConnectionError:
+            check("remembered public address is refused", True)
     finally:
         android.IS_ANDROID, android.wifi_interface = saved
         socket.getaddrinfo = android._system_getaddrinfo
